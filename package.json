@@ -1,6 +1,6 @@
 {
-  "name": "wxt-starter",
-  "description": "manifest.json description",
+  "name": "second-take",
+  "description": "LLMの回答をワンクリックで別のLLMに聞き直すブラウザ拡張",
   "private": true,
   "version": "0.0.0",
   "type": "module",
