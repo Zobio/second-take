@@ -43,7 +43,8 @@ export function waitForElement<T extends Element = HTMLElement>(
  * 重複して入っていることがあるので、それを除いて読む。
  */
 export function visibleText(el: HTMLElement): string {
-  const hidden = '.sr-only, [aria-hidden="true"]';
+  // .sr-only: Tailwind系（Claude など） / .cdk-visually-hidden: Angular系（Gemini）
+  const hidden = '.sr-only, .cdk-visually-hidden, [aria-hidden="true"]';
   if (!el.querySelector(hidden)) return el.innerText.trim();
   return [...el.children]
     .filter((c): c is HTMLElement => c instanceof HTMLElement && !c.matches(hidden))

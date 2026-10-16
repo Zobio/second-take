@@ -1,6 +1,6 @@
-import { providers, detectProvider, getProvider, type Provider } from '@/providers';
+import { providers, detectProvider, type Provider } from '@/providers';
 import { buildPrompt } from '@/utils/prompt';
-import { getTargetFor } from '@/utils/settings';
+import { getTargetsFor } from '@/utils/settings';
 import { sendMessage, type ClaimResponse } from '@/utils/messages';
 
 /**
@@ -50,7 +50,8 @@ async function claimWithRetry(times = 5): Promise<ClaimResponse> {
 }
 
 async function mountButton(source: Provider) {
-  const target = getProvider(await getTargetFor(source.id));
+  const targets = await getTargetsFor(source.id);
+  if (targets.length === 0) return;
 
   // サイトのCSSと干渉しないよう Shadow DOM の中に置く。
   // 画面右下に固定表示するので、サイトのレイアウト変更やSPA遷移の影響を受けにくい。
@@ -59,42 +60,74 @@ async function mountButton(source: Provider) {
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `
     <style>
-      button {
+      .wrap {
         position: fixed; right: 20px; bottom: 96px; z-index: 2147483647;
+        display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+        font: 600 13px system-ui, sans-serif;
+      }
+      button {
         padding: 8px 14px; border: none; border-radius: 999px;
-        background: #1f2937; color: #fff; font: 600 13px system-ui, sans-serif;
+        background: #1f2937; color: #fff; font: inherit;
         box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: pointer; opacity: .85;
       }
       button:hover { opacity: 1; }
       button:disabled { opacity: .5; cursor: default; }
+      .menu { display: none; flex-direction: column; align-items: flex-end; gap: 6px; }
+      .menu.open { display: flex; }
+      .menu button { background: #fff; color: #1f2937; border: 1px solid #d1d5db; }
     </style>
-    <button type="button">${target.name}に聞き直す</button>
+    <div class="wrap">
+      <div class="menu"></div>
+      <button type="button" class="toggle">別のAIに聞き直す ▴</button>
+    </div>
   `;
-  const button = shadow.querySelector('button')!;
+  const toggle = shadow.querySelector<HTMLButtonElement>('.toggle')!;
+  const menu = shadow.querySelector<HTMLDivElement>('.menu')!;
 
-  button.addEventListener('click', async () => {
-    const messages = source.extractConversation();
-    if (messages.length === 0) {
-      alert('second-take: 会話が見つかりませんでした');
-      return;
-    }
-    button.disabled = true;
-    try {
-      await sendMessage({
-        type: 'handoff',
-        target: target.id,
-        prompt: buildPrompt(source.name, messages),
-      });
-    } catch (e) {
-      console.error('[second-take] 引き継ぎに失敗しました', e);
-      alert(
-        `second-take: ${target.name}への引き継ぎに失敗しました。\n` +
-          '拡張機能を再読み込みした場合は、このページも再読み込みしてください。',
-      );
-    } finally {
-      button.disabled = false;
-    }
+  // 送り先ごとにメニュー項目を作る（サービスが増えても自動で並ぶ）
+  for (const target of targets) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.textContent = `${target.name}に聞き直す`;
+    item.addEventListener('click', () => {
+      menu.classList.remove('open');
+      handoff(source, target, toggle);
+    });
+    menu.append(item);
+  }
+
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.classList.toggle('open');
+  });
+  // メニューの外をクリックしたら閉じる
+  document.addEventListener('click', (e) => {
+    if (!e.composedPath().includes(host)) menu.classList.remove('open');
   });
 
   document.body.append(host);
+}
+
+async function handoff(source: Provider, target: Provider, button: HTMLButtonElement) {
+  const messages = source.extractConversation();
+  if (messages.length === 0) {
+    alert('second-take: 会話が見つかりませんでした');
+    return;
+  }
+  button.disabled = true;
+  try {
+    await sendMessage({
+      type: 'handoff',
+      target: target.id,
+      prompt: buildPrompt(source.name, messages),
+    });
+  } catch (e) {
+    console.error('[second-take] 引き継ぎに失敗しました', e);
+    alert(
+      `second-take: ${target.name}への引き継ぎに失敗しました。\n` +
+        '拡張機能を再読み込みした場合は、このページも再読み込みしてください。',
+    );
+  } finally {
+    button.disabled = false;
+  }
 }

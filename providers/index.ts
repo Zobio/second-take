@@ -1,9 +1,10 @@
 import type { Provider, ProviderId } from './types';
 import { claude } from './claude';
 import { chatgpt } from './chatgpt';
+import { gemini } from './gemini';
 
 /** 対応サービスの一覧。新しいサービスはここに足す */
-export const providers: Provider[] = [claude, chatgpt];
+export const providers: Provider[] = [claude, chatgpt, gemini];
 
 export function getProvider(id: ProviderId): Provider {
   const p = providers.find((p) => p.id === id);

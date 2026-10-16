@@ -24,7 +24,7 @@ export interface Provider {
   submitPrompt(text: string): Promise<void>;
 }
 
-export type ProviderId = 'claude' | 'chatgpt';
+export type ProviderId = 'claude' | 'chatgpt' | 'gemini';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

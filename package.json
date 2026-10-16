@@ -2,7 +2,7 @@
   "name": "second-take",
   "description": "LLMの回答をワンクリックで別のLLMに聞き直すブラウザ拡張",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
