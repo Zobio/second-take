@@ -1,6 +1,6 @@
 import { providers, detectProvider, type Provider } from '@/providers';
-import { buildPrompt } from '@/utils/prompt';
-import { getTargetsFor } from '@/utils/settings';
+import { actions, type Action } from '@/actions';
+import { getTargetsFor, getLastTarget, setLastTarget } from '@/utils/settings';
 import { sendMessage, type ClaimResponse } from '@/utils/messages';
 
 /**
@@ -14,10 +14,8 @@ export default defineContentScript({
     const provider = detectProvider(location.href);
     if (!provider) return;
 
-    // 送り元として: ボタンを出す（background の状態に関係なく先に出す）
     await mountButton(provider);
 
-    // 送り先として: このタブ宛てのプロンプトがあれば送信する
     const claimed = await claimWithRetry();
     if (claimed) {
       try {
@@ -30,10 +28,6 @@ export default defineContentScript({
   },
 });
 
-/**
- * background がまだ起動していないと "Receiving end does not exist" になるので、
- * 少し待って何度か試す。最後まで繋がらなければ「宛先なし」として扱う。
- */
 async function claimWithRetry(times = 5): Promise<ClaimResponse> {
   for (let i = 0; i < times; i++) {
     try {
@@ -49,12 +43,13 @@ async function claimWithRetry(times = 5): Promise<ClaimResponse> {
   return null;
 }
 
+/**
+ * 右下のボタンとメニュー。
+ *   ① 指示を選ぶ（actions/ の一覧）
+ *   ② 送り先を選ぶ（指示が入力欄を持つなら、ここに補足の入力欄も出す）
+ * 指示・送り先のどちらが増えても、定義から自動で組み立てる。
+ */
 async function mountButton(source: Provider) {
-  const targets = await getTargetsFor(source.id);
-  if (targets.length === 0) return;
-
-  // サイトのCSSと干渉しないよう Shadow DOM の中に置く。
-  // 画面右下に固定表示するので、サイトのレイアウト変更やSPA遷移の影響を受けにくい。
   const host = document.createElement('div');
   host.id = 'second-take-root';
   const shadow = host.attachShadow({ mode: 'open' });
@@ -75,40 +70,101 @@ async function mountButton(source: Provider) {
       .menu { display: none; flex-direction: column; align-items: flex-end; gap: 6px; }
       .menu.open { display: flex; }
       .menu button { background: #fff; color: #1f2937; border: 1px solid #d1d5db; }
+      .menu .back { background: transparent; box-shadow: none; border: none; color: #6b7280; padding: 4px 8px; }
+      .title { color: #374151; padding: 0 4px; text-shadow: 0 0 4px #fff; }
+      input {
+        width: 260px; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 10px;
+        font: 400 13px system-ui, sans-serif; color: #111827; background: #fff;
+        box-shadow: 0 2px 8px rgba(0,0,0,.15); outline: none;
+      }
+      input:focus { border-color: #6b7280; }
     </style>
     <div class="wrap">
       <div class="menu"></div>
-      <button type="button" class="toggle">別のAIに聞き直す ▴</button>
+      <button type="button" class="toggle">別のAIに頼む ▴</button>
     </div>
   `;
   const toggle = shadow.querySelector<HTMLButtonElement>('.toggle')!;
   const menu = shadow.querySelector<HTMLDivElement>('.menu')!;
 
-  // 送り先ごとにメニュー項目を作る（サービスが増えても自動で並ぶ）
-  for (const target of targets) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.textContent = `${target.name}に聞き直す`;
-    item.addEventListener('click', () => {
-      menu.classList.remove('open');
-      handoff(source, target, toggle);
-    });
-    menu.append(item);
-  }
+  const close = () => menu.classList.remove('open');
+
+  const makeButton = (text: string, onClick: () => void, className?: string) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    if (className) b.className = className;
+    b.addEventListener('click', onClick);
+    return b;
+  };
+
+  const showActions = () => {
+    menu.replaceChildren(...actions.map((a) => makeButton(a.label, () => showTargets(a))));
+  };
+
+  const showTargets = async (action: Action) => {
+    const targets = await getTargetsFor(source.id, action);
+    const children: HTMLElement[] = [];
+
+    let input: HTMLInputElement | undefined;
+    if (action.input) {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = action.input.placeholder;
+      isolateKeyboard(input);
+      children.push(input);
+    }
+
+    const run = (target: Provider) => {
+      close();
+      setLastTarget(action.id, target.id);
+      handoff(source, target, action, input?.value.trim() ?? '', toggle);
+    };
+
+    for (const t of targets) children.push(makeButton(action.targetLabel(t), () => run(t)));
+
+    children.push(makeButton(`← ${action.label}`, showActions, 'back'));
+    menu.replaceChildren(...children);
+
+    if (input) {
+      input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Escape') return close();
+        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        const lastId = await getLastTarget(action.id);
+        const target = targets.find((t) => t.id === lastId) ?? targets[0];
+        if (target) run(target);
+      });
+      input.focus();
+    }
+  };
 
   toggle.addEventListener('click', (e) => {
     e.stopPropagation();
-    menu.classList.toggle('open');
+    if (menu.classList.contains('open')) return close();
+    showActions();
+    menu.classList.add('open');
   });
-  // メニューの外をクリックしたら閉じる
   document.addEventListener('click', (e) => {
-    if (!e.composedPath().includes(host)) menu.classList.remove('open');
+    if (!e.composedPath().includes(host)) close();
   });
 
   document.body.append(host);
 }
 
-async function handoff(source: Provider, target: Provider, button: HTMLButtonElement) {
+function isolateKeyboard(el: HTMLElement) {
+  for (const type of ['keydown', 'keyup', 'keypress', 'beforeinput', 'input', 'paste']) {
+    el.addEventListener(type, (e) => e.stopPropagation());
+  }
+}
+
+async function handoff(
+  source: Provider,
+  target: Provider,
+  action: Action,
+  note: string,
+  button: HTMLButtonElement,
+) {
   const messages = source.extractConversation();
   if (messages.length === 0) {
     alert('second-take: 会話が見つかりませんでした');
@@ -119,7 +175,7 @@ async function handoff(source: Provider, target: Provider, button: HTMLButtonEle
     await sendMessage({
       type: 'handoff',
       target: target.id,
-      prompt: buildPrompt(source.name, messages),
+      prompt: action.buildPrompt({ sourceName: source.name, messages, note }),
     });
   } catch (e) {
     console.error('[second-take] 引き継ぎに失敗しました', e);
